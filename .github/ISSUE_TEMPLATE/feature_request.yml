@@ -1,0 +1,50 @@
+name: Feature Request
+description: Usulkan fitur baru atau peningkatan behavior.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Terima kasih atas idenya. Semakin jelas konteks, semakin cepat dievaluasi.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Masalah apa yang ingin diselesaikan?
+      placeholder: Saat ini ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Jelaskan solusi yang diusulkan.
+      placeholder: Saya mengusulkan ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Opsi lain yang sudah dipertimbangkan.
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Dampak
+      description: Dampak ke user, API, UI, operasional, atau migration.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: Saya sudah cek issue serupa belum ada.
+          required: true
+        - label: Usulan ini tidak menyertakan data sensitif.
+          required: true

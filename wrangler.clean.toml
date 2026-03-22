@@ -1,0 +1,35 @@
+name = "crot-mail"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+
+# Uncomment and adjust when using custom domain route in production.
+# [[routes]]
+# pattern = "your-domain.com/*"
+# zone_name = "your-domain.com"
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "your-d1-database-name"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "MAIL_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+MAIL_DOMAINS = "mail1.example.com,mail2.example.com"
+EXPIRE_MINUTES = "43200"
+MESSAGE_RETENTION_DAYS = "1"
+
+# IMPORTANT:
+# Do not put ACCESS_KEY in this file for public repositories.
+# Set it as a Wrangler secret instead:
+# npx wrangler secret put ACCESS_KEY --config wrangler.clean.toml
