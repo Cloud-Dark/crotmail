@@ -3,8 +3,6 @@
 Disposable email service berbasis Cloudflare Workers, dirancang untuk alur signup/verifikasi yang cepat tanpa membebani email utama.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Last Commit](https://img.shields.io/github/last-commit/imnoob59/crotmail)](https://github.com/imnoob59/crotmail/commits/main)
-[![Issues](https://img.shields.io/github/issues/imnoob59/crotmail)](https://github.com/imnoob59/crotmail/issues)
 [![Stars](https://img.shields.io/github/stars/imnoob59/crotmail?style=social)](https://github.com/imnoob59/crotmail/stargazers)
 
 - Website: https://crotmail.app
@@ -325,28 +323,6 @@ CrotMail adalah open source project untuk use case disposable inbox yang praktis
 
 - Maintainer: Masanto
 - GitHub: https://github.com/imnoob59
-
-## Roadmap
-
-- Admin tooling yang lebih lengkap untuk mailbox management
-- Observability dasar (metrics dan error tracking)
-- Peningkatan UX extension untuk inbox workflow harian
-- Hardening security flow dan dokumentasi operasional
-
-## Community Standards
-
-- Contribution Guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
-- Security Policy: [SECURITY.md](./SECURITY.md)
-- Code of Conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
-- Changelog: [CHANGELOG.md](./CHANGELOG.md)
-- Pull Request Template: [.github/PULL_REQUEST_TEMPLATE.md](./.github/PULL_REQUEST_TEMPLATE.md)
-- Issue Templates: [.github/ISSUE_TEMPLATE](./.github/ISSUE_TEMPLATE)
-
-## Automation
-
-- CI Workflow: [.github/workflows/ci.yml](./.github/workflows/ci.yml)
-- Dependency Updates: [.github/dependabot.yml](./.github/dependabot.yml)
-- Release Checklist: [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)
 
 ## Copyright
 
