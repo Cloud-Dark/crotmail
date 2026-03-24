@@ -46,19 +46,16 @@ if (route.params.code) {
 }
 
 async function handleLogin() {
-  if (!accessKey.value) {
-    toast.error('Masukkan access key')
-    return
-  }
-  
   loading.value = true
-  
-  // Save key for backend validation
-  sessionStorage.setItem('accessKey', accessKey.value)
-  
+
   try {
-    // Try loading domain list to validate key
-    await api.getDomains()
+    if (accessKey.value) {
+      sessionStorage.setItem('accessKey', accessKey.value)
+      await api.getDomains()
+    } else {
+      sessionStorage.removeItem('accessKey')
+    }
+
     sessionStorage.setItem('auth', 'true')
     router.push('/app')
   } catch (e) {
@@ -107,7 +104,7 @@ async function handleLogin() {
                 v-model="accessKey"
                 type="password"
                 class="input pl-12"
-                placeholder="Masukkan access key"
+                placeholder="Access key opsional"
                 autocomplete="off"
               >
               <div class="absolute left-4 top-1/2 -translate-y-1/2 text-dark-500">
@@ -125,7 +122,7 @@ async function handleLogin() {
                 <span>Memverifikasi...</span>
               </template>
               <template v-else>
-                <span>Masuk ke inbox</span>
+                <span>Masuk ke aplikasi</span>
                 <ArrowRight class="w-5 h-5" />
               </template>
             </button>
@@ -134,7 +131,7 @@ async function handleLogin() {
           <!-- Hint -->
           <div class="mt-8 pt-6 border-t border-white/5 text-center">
             <p class="text-dark-500 text-xs leading-relaxed">
-              Tambahkan key ke URL untuk login otomatis<br>
+              Kosongkan field ini jika `ACCESS_KEY` tidak dipakai<br>
               <code class="px-2 py-0.5 rounded bg-dark-800 text-dark-400 font-mono text-xs">?key=access-key-anda</code>
             </p>
           </div>

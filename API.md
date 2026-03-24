@@ -2,12 +2,14 @@
 
 API documentation for the CrotMail temporary email service.
 
+> Catatan mode ringan: mailbox aktif disimpan di memori Worker dan frontend menyimpan cache email ke `localStorage`. Tidak ada D1 atau KV pada mode ini.
+
 ## Basic Information
 
 - **Base URL**: `https://your-domain.workers.dev`
 - **Content-Type**: `application/json`
 - **Authentication**:
-  - `X-Access-Key` header: used for sensitive operations such as mailbox creation
+  - `X-Access-Key` header: optional, used only if `ACCESS_KEY` diaktifkan
   - `Bearer Token`: used for mailbox actions via the `Authorization` header
 
 ---

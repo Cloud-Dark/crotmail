@@ -17,7 +17,7 @@ const toast = useToastStore()
 // State
 const timerInterval = ref(null)
 const refreshInterval = ref(null)
-const showMail = ref(null)
+const showMail = ref(mailStore.currentMail || null)
 const selectedDomain = ref('')
 const customUsername = ref('')
 const timerTick = ref(0)
@@ -49,6 +49,8 @@ watch(() => mailStore.email, (email) => {
 
 // Watch selected mail changes and render iframe HTML
 watch(showMail, async (mail) => {
+  mailStore.setCurrentMail(mail)
+
   if (mail?.html?.length > 0) {
     await nextTick()
     const iframe = mailIframe.value
@@ -184,6 +186,13 @@ async function refreshMails() {
   try {
     const { mails } = await api.getMessages(mailStore.token)
     mailStore.setMails(mails)
+
+    if (showMail.value) {
+      const updatedMail = mails.find(mail => mail.id === showMail.value.id)
+      if (!updatedMail) {
+        showMail.value = null
+      }
+    }
   } catch (e) {
     console.error('Failed to load mails:', e)
   }
@@ -250,7 +259,7 @@ async function deleteAccount() {
     }
 
     if (currentAddress && targetAddress === currentAddress) {
-      mailStore.clearSession()
+      mailStore.clearSession({ clearCache: true })
       mailStore.setMails([])
       customUsername.value = ''
       stopTimer()
@@ -518,7 +527,7 @@ function getInitial(name) {
               <Inbox class="w-4 h-4 text-dark-400" />
               Kotak Masuk
             </h2>
-            <span class="text-xs text-dark-500">{{ mailStore.mails.length }} pesan</span>
+              <span class="text-xs text-dark-500">{{ mailStore.mails.length }} pesan lokal</span>
           </div>
           
           <div class="flex-1 overflow-y-auto">
@@ -639,7 +648,7 @@ function getInitial(name) {
     <!-- Footer -->
     <footer class="border-t border-white/5 py-3">
       <div class="max-w-6xl mx-auto px-4 text-center text-xs text-dark-600">
-        Dibangun dengan Cloudflare Workers · Pesan otomatis dihapus setelah 1 hari
+        Mode ringan tanpa database · pesan aktif disimpan di memori Worker dan cache browser
       </div>
     </footer>
   </div>

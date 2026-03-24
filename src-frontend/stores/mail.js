@@ -2,6 +2,54 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 export const useMailStore = defineStore('mail', () => {
+  function getMailCacheKey(address = email.value) {
+    return address ? `tm_mails_${address}` : null
+  }
+
+  function getCurrentMailCacheKey(address = email.value) {
+    return address ? `tm_currentMail_${address}` : null
+  }
+
+  function loadCachedMails(address = email.value) {
+    const key = getMailCacheKey(address)
+    if (!key) return []
+
+    try {
+      const raw = localStorage.getItem(key)
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  }
+
+  function loadCachedCurrentMail(address = email.value) {
+    const key = getCurrentMailCacheKey(address)
+    if (!key) return null
+
+    try {
+      const raw = localStorage.getItem(key)
+      return raw ? JSON.parse(raw) : null
+    } catch {
+      return null
+    }
+  }
+
+  function persistMails(address = email.value) {
+    const key = getMailCacheKey(address)
+    if (!key) return
+    localStorage.setItem(key, JSON.stringify(mails.value))
+  }
+
+  function persistCurrentMail(address = email.value) {
+    const key = getCurrentMailCacheKey(address)
+    if (!key) return
+    if (currentMail.value) {
+      localStorage.setItem(key, JSON.stringify(currentMail.value))
+    } else {
+      localStorage.removeItem(key)
+    }
+  }
+
   // State
   const token = ref(localStorage.getItem('tm_token') || null)
   const email = ref(localStorage.getItem('tm_email') || null)
@@ -11,8 +59,8 @@ export const useMailStore = defineStore('mail', () => {
   const resumeCode = ref(localStorage.getItem('tm_resumeCode') || null)
   const resumeUrl = ref(localStorage.getItem('tm_resumeUrl') || null)
   const domains = ref([])
-  const mails = ref([])
-  const currentMail = ref(null)
+  const mails = ref(loadCachedMails())
+  const currentMail = ref(loadCachedCurrentMail())
   const loading = ref(false)
 
   // Computed properties
@@ -31,6 +79,7 @@ export const useMailStore = defineStore('mail', () => {
 
   // Methods
   function setSession(data) {
+    const previousEmail = email.value
     token.value = data.token
     email.value = data.address
     emailId.value = data.id
@@ -46,9 +95,15 @@ export const useMailStore = defineStore('mail', () => {
     localStorage.setItem('tm_authMode', authMode.value)
     if (resumeCode.value) localStorage.setItem('tm_resumeCode', resumeCode.value)
     if (resumeUrl.value) localStorage.setItem('tm_resumeUrl', resumeUrl.value)
+
+    if (previousEmail !== data.address) {
+      mails.value = loadCachedMails(data.address)
+      currentMail.value = loadCachedCurrentMail(data.address)
+    }
   }
 
-  function clearSession() {
+  function clearSession({ clearCache = false } = {}) {
+    const activeEmail = email.value
     token.value = null
     email.value = null
     emailId.value = null
@@ -66,14 +121,21 @@ export const useMailStore = defineStore('mail', () => {
     localStorage.removeItem('tm_authMode')
     localStorage.removeItem('tm_resumeCode')
     localStorage.removeItem('tm_resumeUrl')
+
+    if (clearCache && activeEmail) {
+      localStorage.removeItem(getMailCacheKey(activeEmail))
+      localStorage.removeItem(getCurrentMailCacheKey(activeEmail))
+    }
   }
 
   function setMails(data) {
     mails.value = data
+    persistMails()
   }
 
   function setCurrentMail(mail) {
     currentMail.value = mail
+    persistCurrentMail()
   }
 
   function setDomains(data) {
@@ -119,5 +181,7 @@ export const useMailStore = defineStore('mail', () => {
     setDomains,
     setLoading,
     extendExpiry,
+    loadCachedMails,
+    loadCachedCurrentMail,
   }
 })
