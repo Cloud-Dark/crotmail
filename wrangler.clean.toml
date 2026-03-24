@@ -15,6 +15,12 @@ binding = "ASSETS"
 [triggers]
 crons = ["*/5 * * * *"]
 
+# OPTIONAL (required only if you choose "Cloudflare D1" provider from UI migrate):
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "crot-mail-cache"
+# database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
 [vars]
 MAIL_DOMAINS = "mail1.example.com,mail2.example.com"
 EXPIRE_MINUTES = "43200"

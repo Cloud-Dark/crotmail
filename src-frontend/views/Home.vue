@@ -4,17 +4,17 @@ import { useRouter } from 'vue-router'
 import { useMailStore } from '@/stores/mail'
 import { useToastStore } from '@/stores/toast'
 import { api } from '@/services/api'
+import { getStorageSettings, saveStorageSettings, migrateToSelectedStorage, loadFromSelectedStorage } from '@/services/storage'
 import {
   Mail, RefreshCw, Copy, Trash2, Plus, LogOut,
   Timer, Inbox, Paperclip, Download, ChevronRight, Link2,
-  Sparkles, Shield, Zap
+  Sparkles, Shield, Zap, Server, Database, Save
 } from 'lucide-vue-next'
 
 const router = useRouter()
 const mailStore = useMailStore()
 const toast = useToastStore()
 
-// State
 const timerInterval = ref(null)
 const refreshInterval = ref(null)
 const showMail = ref(mailStore.currentMail || null)
@@ -23,8 +23,20 @@ const customUsername = ref('')
 const timerTick = ref(0)
 const showDomainDropdown = ref(false)
 const mailIframe = ref(null)
+const streamStatus = ref('offline')
+const streamEventSource = ref(null)
+const reconnectTimer = ref(null)
 
-// Computed properties
+const storageProvider = ref('localstorage')
+const storageBaseUrl = ref('')
+const storageApiKey = ref('')
+const apiBase = ref(localStorage.getItem('tm_api_base') || '/api')
+const accessKeyInput = ref(localStorage.getItem('tm_access_key') || '')
+const envAccessKey = ref('')
+const envMailDomains = ref('')
+const envExpireMinutes = ref('43200')
+const envRetentionDays = ref('1')
+
 const formattedTime = computed(() => {
   timerTick.value
   if (!mailStore.expiresAt) return '30d 00:00:00'
@@ -38,7 +50,6 @@ const formattedTime = computed(() => {
   return `${days}d ${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
 })
 
-// Watch email changes and sync username/domain inputs
 watch(() => mailStore.email, (email) => {
   if (email) {
     const [username, domain] = email.split('@')
@@ -47,16 +58,14 @@ watch(() => mailStore.email, (email) => {
   }
 }, { immediate: true })
 
-// Watch selected mail changes and render iframe HTML
 watch(showMail, async (mail) => {
   mailStore.setCurrentMail(mail)
+  await persistToSelectedStorage()
 
   if (mail?.html?.length > 0) {
     await nextTick()
     const iframe = mailIframe.value
     if (!iframe) return
-    
-    // Inject HTML into iframe
     const doc = iframe.contentDocument || iframe.contentWindow.document
     doc.open()
     doc.write(`<!DOCTYPE html>
@@ -72,28 +81,27 @@ watch(showMail, async (mail) => {
         <body>${mail.html[0]}</body>
       </html>`)
     doc.close()
-    // Auto-adjust iframe height
-    iframe.onload = () => {
-      try {
-        const height = doc.body.scrollHeight
-        iframe.style.height = Math.min(height + 32, 500) + 'px'
-      } catch (e) {}
-    }
   }
 })
 
-// Initialization
+watch(() => mailStore.token, () => {
+  startRealtimeStream()
+})
+
 onMounted(async () => {
+  loadStorageConfigUi()
+  document.addEventListener('click', handleClickOutside)
+
   if (!mailStore.isLimitedSession) {
     await loadDomains()
   }
-  
-  // Close dropdown when clicking outside
-  document.addEventListener('click', handleClickOutside)
-  
+
   if (mailStore.isAuthenticated && !mailStore.isExpired) {
+    await loadCacheFromSelectedStorage()
+    await syncRuntimeConfigFromWorker()
     startTimer()
     startAutoRefresh()
+    startRealtimeStream()
     await refreshMails()
   }
 })
@@ -101,6 +109,8 @@ onMounted(async () => {
 onUnmounted(() => {
   stopTimer()
   stopAutoRefresh()
+  stopRealtimeStream()
+  if (reconnectTimer.value) clearTimeout(reconnectTimer.value)
   document.removeEventListener('click', handleClickOutside)
 })
 
@@ -111,7 +121,167 @@ function handleClickOutside(e) {
   }
 }
 
-// Methods
+function loadStorageConfigUi() {
+  const settings = getStorageSettings()
+  storageProvider.value = settings.provider
+  storageBaseUrl.value = settings.baseUrl
+  storageApiKey.value = settings.apiKey
+}
+
+async function saveUiConfig() {
+  saveStorageSettings({
+    provider: storageProvider.value,
+    baseUrl: storageBaseUrl.value,
+    apiKey: storageApiKey.value,
+  })
+
+  localStorage.setItem('tm_api_base', apiBase.value.trim() || '/api')
+  if (accessKeyInput.value.trim()) {
+    localStorage.setItem('tm_access_key', accessKeyInput.value.trim())
+    sessionStorage.setItem('accessKey', accessKeyInput.value.trim())
+  } else {
+    localStorage.removeItem('tm_access_key')
+    sessionStorage.removeItem('accessKey')
+  }
+
+  toast.success('Konfigurasi UI tersimpan')
+  await loadDomains()
+}
+
+async function syncRuntimeConfigFromWorker() {
+  if (!mailStore.token || mailStore.isLimitedSession) return
+  try {
+    const response = await api.getRuntimeConfig(mailStore.token)
+    const config = response.config || {}
+    envAccessKey.value = config.ACCESS_KEY || ''
+    envMailDomains.value = config.MAIL_DOMAINS || ''
+    envExpireMinutes.value = config.EXPIRE_MINUTES || '43200'
+    envRetentionDays.value = config.MESSAGE_RETENTION_DAYS || '1'
+  } catch (e) {
+    console.error('Failed to read runtime config', e)
+  }
+}
+
+async function applyRuntimeConfig() {
+  if (!mailStore.token || mailStore.isLimitedSession) {
+    toast.error('Butuh sesi full untuk update runtime config')
+    return
+  }
+
+  try {
+    await api.updateRuntimeConfig(mailStore.token, {
+      ACCESS_KEY: envAccessKey.value,
+      MAIL_DOMAINS: envMailDomains.value,
+      EXPIRE_MINUTES: envExpireMinutes.value,
+      MESSAGE_RETENTION_DAYS: envRetentionDays.value,
+    })
+    toast.success('Runtime config berhasil diupdate')
+    await loadDomains()
+  } catch (e) {
+    toast.error(e.message || 'Gagal update runtime config')
+  }
+}
+
+async function loadCacheFromSelectedStorage() {
+  if (!mailStore.email || !mailStore.token) return
+  try {
+    const cached = await loadFromSelectedStorage(mailStore.email, mailStore.token)
+    if (Array.isArray(cached.messages) && cached.messages.length) {
+      mailStore.setMails(cached.messages)
+    }
+    if (cached.currentMail) {
+      showMail.value = cached.currentMail
+    }
+  } catch (e) {
+    console.error('Failed loading selected storage cache', e)
+  }
+}
+
+async function persistToSelectedStorage() {
+  if (!mailStore.email || !mailStore.token) return
+  try {
+    await migrateToSelectedStorage(mailStore.email, mailStore.token, {
+      messages: mailStore.mails,
+      currentMail: showMail.value,
+    })
+  } catch (e) {
+    console.error('persist storage failed', e)
+  }
+}
+
+async function migrateStorageNow() {
+  if (!mailStore.email || !mailStore.token) {
+    toast.error('Buat inbox dulu sebelum migrate')
+    return
+  }
+  try {
+    await persistToSelectedStorage()
+    toast.success(`Migrasi ke ${storageProvider.value} selesai`)
+  } catch (e) {
+    toast.error(e.message || 'Migrasi gagal')
+  }
+}
+
+function upsertMailSummary(newMail) {
+  const existing = mailStore.mails.find(mail => mail.id === newMail.id)
+  if (existing) return
+  mailStore.setMails([newMail, ...mailStore.mails])
+}
+
+function stopRealtimeStream() {
+  streamStatus.value = 'offline'
+  if (streamEventSource.value) {
+    streamEventSource.value.close()
+    streamEventSource.value = null
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer.value) clearTimeout(reconnectTimer.value)
+  reconnectTimer.value = setTimeout(() => {
+    startRealtimeStream()
+  }, 3000)
+}
+
+function startRealtimeStream() {
+  stopRealtimeStream()
+
+  if (!mailStore.token || mailStore.isExpired) return
+
+  const url = api.getStreamUrl(mailStore.token)
+  streamStatus.value = 'connecting'
+
+  const eventSource = new EventSource(url)
+  streamEventSource.value = eventSource
+
+  eventSource.addEventListener('ready', () => {
+    streamStatus.value = 'connected'
+  })
+
+  eventSource.addEventListener('message', async (event) => {
+    try {
+      const payload = JSON.parse(event.data || '{}')
+      if (payload?.id) {
+        upsertMailSummary(payload)
+        await persistToSelectedStorage()
+      }
+    } catch {
+      // ignore invalid event payload
+    }
+  })
+
+  eventSource.addEventListener('end', () => {
+    streamStatus.value = 'expired'
+    stopRealtimeStream()
+  })
+
+  eventSource.onerror = () => {
+    streamStatus.value = 'reconnecting'
+    stopRealtimeStream()
+    scheduleReconnect()
+  }
+}
+
 async function loadDomains() {
   try {
     const domains = await api.getDomains()
@@ -134,45 +304,37 @@ async function createNewEmail() {
     toast.error('Belum ada domain yang tersedia')
     return
   }
-  
+
   try {
     mailStore.setLoading(true)
-    
-    // If an existing inbox exists, delete it first
     if (mailStore.emailId && mailStore.token) {
       try {
         await api.deleteAccount(mailStore.emailId, mailStore.token)
-      } catch (e) {
-        // Ignore delete failure
-      }
+      } catch {}
     }
-    
-    // Clear message list and details
+
     mailStore.setMails([])
     showMail.value = null
-    
-    // Check whether username input was modified
+
     const currentUsername = mailStore.email ? mailStore.email.split('@')[0] : ''
     const isModified = customUsername.value.trim() && customUsername.value.trim() !== currentUsername
-    
-    // Pick creation method based on input change
+
     let data
     if (isModified) {
-      // Input modified -> create custom mailbox
       const address = `${customUsername.value.trim()}@${selectedDomain.value}`
       data = await api.createCustomEmail(address)
     } else {
-      // Input unchanged or empty -> create random mailbox
       data = await api.generateRandomEmail(selectedDomain.value || null)
-      // Update username/domain inputs
       const [username, domain] = data.address.split('@')
       customUsername.value = username
       selectedDomain.value = domain
     }
-    
+
     mailStore.setSession(data)
     startTimer()
     startAutoRefresh()
+    startRealtimeStream()
+    await loadCacheFromSelectedStorage()
     toast.success('Inbox berhasil dibuat')
   } catch (e) {
     toast.error(e.message || 'Gagal membuat inbox, coba lagi')
@@ -193,6 +355,8 @@ async function refreshMails() {
         showMail.value = null
       }
     }
+
+    await persistToSelectedStorage()
   } catch (e) {
     console.error('Failed to load mails:', e)
   }
@@ -202,25 +366,23 @@ async function openMail(mail) {
   try {
     const fullMail = await api.getMessage(mail.id, mailStore.token)
     showMail.value = fullMail
-    
     if (!mailStore.isLimitedSession && !mail.seen) {
       await api.markAsRead(mail.id, mailStore.token)
       await refreshMails()
     }
-  } catch (e) {
+  } catch {
     toast.error('Gagal memuat email')
   }
 }
 
 async function deleteMail() {
   if (!showMail.value) return
-  
   try {
     await api.deleteMessage(showMail.value.id, mailStore.token)
     showMail.value = null
     await refreshMails()
     toast.success('Email berhasil dihapus')
-  } catch (e) {
+  } catch {
     toast.error('Gagal menghapus email')
   }
 }
@@ -245,13 +407,12 @@ async function deleteAccount() {
 
   const targetAddress = typedAddress || currentAddress
   if (!confirm(`Yakin ingin menghapus inbox ${targetAddress}?`)) return
-  
+
   try {
     if (canUseCurrentSessionDelete) {
       try {
         await api.deleteAccount(mailStore.emailId, mailStore.token)
-      } catch (e) {
-        // Fallback to admin delete if mailbox token is already invalid.
+      } catch {
         await api.adminDeleteAccountByAddress(targetAddress)
       }
     } else {
@@ -264,19 +425,14 @@ async function deleteAccount() {
       customUsername.value = ''
       stopTimer()
       stopAutoRefresh()
+      stopRealtimeStream()
       showMail.value = null
     }
 
     toast.success(`Inbox ${targetAddress} berhasil dihapus`)
   } catch (e) {
-    if (e?.status === 404) {
-      toast.error('Inbox tidak ditemukan')
-      return
-    }
-    if (e?.status === 401) {
-      toast.error('Access key tidak valid untuk admin delete')
-      return
-    }
+    if (e?.status === 404) return toast.error('Inbox tidak ditemukan')
+    if (e?.status === 401) return toast.error('Access key tidak valid untuk admin delete')
     toast.error(e.message || 'Gagal menghapus inbox')
   }
 }
@@ -293,7 +449,7 @@ async function extendTime() {
     mailStore.expiresAt = data.expiresAt
     localStorage.setItem('tm_expiresAt', data.expiresAt)
     toast.success('Berhasil diperpanjang 30 menit')
-  } catch (e) {
+  } catch {
     toast.error('Gagal memperpanjang waktu')
   }
 }
@@ -301,11 +457,10 @@ async function extendTime() {
 async function copyEmail() {
   if (!customUsername.value || !selectedDomain.value) return
   const email = `${customUsername.value}@${selectedDomain.value}`
-  
   try {
     await navigator.clipboard.writeText(email)
     toast.success('Berhasil disalin ke clipboard')
-  } catch (e) {
+  } catch {
     toast.error('Gagal menyalin')
   }
 }
@@ -326,6 +481,7 @@ async function copyResumeLink() {
 }
 
 function logout() {
+  stopRealtimeStream()
   mailStore.clearSession()
   mailStore.setMails([])
   customUsername.value = ''
@@ -339,10 +495,10 @@ function startTimer() {
   stopTimer()
   timerInterval.value = setInterval(() => {
     timerTick.value++
-    
     if (mailStore.isExpired) {
       stopTimer()
       stopAutoRefresh()
+      stopRealtimeStream()
       toast.error('Inbox sudah kedaluwarsa')
     }
   }, 1000)
@@ -371,7 +527,6 @@ function formatTime(dateStr) {
   const date = new Date(dateStr)
   const now = new Date()
   const diff = now - date
-  
   if (diff < 60000) return 'baru saja'
   if (diff < 3600000) return `${Math.floor(diff / 60000)} menit lalu`
   if (diff < 86400000) return `${Math.floor(diff / 3600000)} jam lalu`
@@ -384,8 +539,8 @@ function formatDateTime(dateStr) {
 
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function getInitial(name) {
@@ -395,24 +550,20 @@ function getInitial(name) {
 
 <template>
   <div class="min-h-screen flex flex-col">
-    <!-- Top bar -->
     <header class="sticky top-0 z-40 border-b border-white/5 bg-dark-950/90 backdrop-blur-xl">
       <div class="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
-        <!-- Logo -->
         <div class="flex items-center gap-2.5">
           <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center">
             <Mail class="w-4 h-4 text-white" />
           </div>
           <span class="font-bold text-gradient">CrotMail</span>
         </div>
-        
-        <!-- Remaining time -->
+
         <div v-if="mailStore.email" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
           <Timer class="w-4 h-4 text-amber-500" />
           <span class="text-sm font-mono font-medium text-amber-500">{{ formattedTime }}</span>
         </div>
-        
-        <!-- Actions -->
+
         <div class="flex items-center gap-2">
           <button v-if="mailStore.email && !mailStore.isLimitedSession" @click="extendTime" class="btn-ghost btn-sm">
             <Sparkles class="w-4 h-4" />
@@ -424,13 +575,10 @@ function getInitial(name) {
         </div>
       </div>
     </header>
-    
-    <!-- Main content -->
+
     <main class="flex-1 max-w-6xl mx-auto w-full px-4 py-6">
-      <!-- Mailbox address card -->
       <div class="card p-6 mb-6 relative z-10">
         <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <!-- Left side: username input + domain selector -->
           <div class="flex items-center gap-4">
             <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center flex-shrink-0">
               <Shield class="w-6 h-6 text-white" />
@@ -445,7 +593,6 @@ function getInitial(name) {
                 maxlength="30"
               />
               <span class="text-dark-400 font-medium">@</span>
-              <!-- Custom domain dropdown -->
               <div class="relative domain-dropdown">
                 <button
                   @click="showDomainDropdown = !showDomainDropdown"
@@ -455,7 +602,6 @@ function getInitial(name) {
                   <span class="truncate">{{ selectedDomain || 'Pilih domain' }}</span>
                   <ChevronRight class="w-4 h-4 text-dark-400 transition-transform" :class="showDomainDropdown ? 'rotate-90' : ''" />
                 </button>
-                <!-- Dropdown list -->
                 <Transition name="dropdown">
                   <div
                     v-if="showDomainDropdown"
@@ -481,8 +627,7 @@ function getInitial(name) {
               </button>
             </div>
           </div>
-          
-          <!-- Right-side actions -->
+
           <div class="flex items-center gap-2" v-if="!mailStore.isLimitedSession">
             <button @click="createNewEmail" class="btn-primary btn-sm">
               <Plus class="w-4 h-4" />
@@ -494,10 +639,9 @@ function getInitial(name) {
             </button>
           </div>
         </div>
-        
-        <!-- Stats bar -->
-        <div class="flex items-center justify-between mt-4 pt-4 border-t border-white/5 text-sm text-dark-400">
-          <div class="flex items-center gap-6">
+
+        <div class="flex flex-wrap items-center justify-between mt-4 pt-4 border-t border-white/5 text-sm text-dark-400 gap-2">
+          <div class="flex flex-wrap items-center gap-6">
             <div class="flex items-center gap-1.5">
               <Inbox class="w-4 h-4" />
               <span>{{ mailStore.mails.length }} email</span>
@@ -506,9 +650,11 @@ function getInitial(name) {
               <Mail class="w-4 h-4" />
               <span>{{ mailStore.mails.filter(m => !m.seen).length }} belum dibaca</span>
             </div>
-            <div v-if="refreshInterval" class="flex items-center gap-1.5">
-              <Zap class="w-4 h-4 text-emerald-400" />
-              <span class="text-emerald-400">Menyegarkan otomatis</span>
+            <div class="flex items-center gap-1.5">
+              <Zap class="w-4 h-4" :class="streamStatus === 'connected' ? 'text-emerald-400' : 'text-amber-400'" />
+              <span :class="streamStatus === 'connected' ? 'text-emerald-400' : 'text-amber-400'">
+                Stream {{ streamStatus }}
+              </span>
             </div>
           </div>
           <button @click="refreshMails" class="btn-ghost btn-sm">
@@ -517,19 +663,79 @@ function getInitial(name) {
           </button>
         </div>
       </div>
-      
-      <!-- Mail area - fills remaining space -->
+
+      <div class="card p-6 mb-6 space-y-4">
+        <div class="flex items-center gap-2 text-sm font-semibold">
+          <Server class="w-4 h-4 text-primary-400" />
+          <span>Storage & Runtime Settings</span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <label class="text-xs text-dark-400">Storage Provider
+            <select v-model="storageProvider" class="input mt-1 text-sm">
+              <option value="localstorage">LocalStorage (Default)</option>
+              <option value="supabase">Supabase</option>
+              <option value="d1">Cloudflare D1</option>
+            </select>
+          </label>
+          <label class="text-xs text-dark-400">Storage Base URL
+            <input v-model="storageBaseUrl" class="input mt-1 text-sm" placeholder="https://your-project.supabase.co" />
+          </label>
+          <label class="text-xs text-dark-400">Storage API Key
+            <input v-model="storageApiKey" class="input mt-1 text-sm" placeholder="apikey / anon key" />
+          </label>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <label class="text-xs text-dark-400">API Base
+            <input v-model="apiBase" class="input mt-1 text-sm" placeholder="/api atau https://domain.com/api" />
+          </label>
+          <label class="text-xs text-dark-400">Access Key (UI)
+            <input v-model="accessKeyInput" class="input mt-1 text-sm" placeholder="opsional" />
+          </label>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <label class="text-xs text-dark-400">ACCESS_KEY
+            <input v-model="envAccessKey" class="input mt-1 text-sm" placeholder="opsional" />
+          </label>
+          <label class="text-xs text-dark-400">MAIL_DOMAINS
+            <input v-model="envMailDomains" class="input mt-1 text-sm" placeholder="mail1.com,mail2.com" />
+          </label>
+          <label class="text-xs text-dark-400">EXPIRE_MINUTES
+            <input v-model="envExpireMinutes" class="input mt-1 text-sm" />
+          </label>
+          <label class="text-xs text-dark-400">MESSAGE_RETENTION_DAYS
+            <input v-model="envRetentionDays" class="input mt-1 text-sm" />
+          </label>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <button @click="saveUiConfig" class="btn-ghost btn-sm">
+            <Save class="w-4 h-4" />
+            <span>Simpan UI Config</span>
+          </button>
+          <button @click="migrateStorageNow" class="btn-primary btn-sm">
+            <Database class="w-4 h-4" />
+            <span>Migrate Sekarang</span>
+          </button>
+          <button @click="applyRuntimeConfig" class="btn-ghost btn-sm">
+            <Server class="w-4 h-4" />
+            <span>Apply Runtime Config</span>
+          </button>
+        </div>
+      </div>
+
       <div class="card flex-1 flex flex-col">
-        <!-- Message list view -->
         <div v-if="!showMail">
           <div class="px-4 py-3 border-b border-white/5 flex items-center justify-between">
             <h2 class="font-semibold flex items-center gap-2">
               <Inbox class="w-4 h-4 text-dark-400" />
               Kotak Masuk
             </h2>
-              <span class="text-xs text-dark-500">{{ mailStore.mails.length }} pesan lokal</span>
+            <span class="text-xs text-dark-500">{{ mailStore.mails.length }} pesan lokal</span>
           </div>
-          
+
           <div class="flex-1 overflow-y-auto">
             <template v-if="mailStore.mails.length > 0">
               <div
@@ -539,13 +745,7 @@ function getInitial(name) {
                 class="px-4 py-3 border-b border-white/5 cursor-pointer transition-colors flex items-start gap-3 hover:bg-white/[0.02]"
                 :class="!mail.seen ? 'bg-white/[0.02]' : ''"
               >
-                <!-- Unread dot -->
-                <div 
-                  class="w-2 h-2 rounded-full mt-1.5 flex-shrink-0"
-                  :class="mail.seen ? 'bg-transparent' : 'bg-primary-500'"
-                />
-                
-                <!-- Content -->
+                <div class="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" :class="mail.seen ? 'bg-transparent' : 'bg-primary-500'" />
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center justify-between gap-2 mb-0.5">
                     <span class="text-sm font-medium truncate" :class="mail.seen ? 'text-dark-300' : 'text-dark-100'">
@@ -561,24 +761,21 @@ function getInitial(name) {
                     <span class="text-xs text-dark-500">Ada lampiran</span>
                   </div>
                 </div>
-                
                 <ChevronRight class="w-4 h-4 text-dark-600 flex-shrink-0" />
               </div>
             </template>
-            
+
             <template v-else>
               <div class="flex flex-col items-center justify-center text-dark-500 py-16">
                 <Inbox class="w-16 h-16 mb-4 opacity-20" />
                 <p class="text-dark-400 mb-1">Belum ada email</p>
-                <p class="text-sm">Email baru akan muncul otomatis</p>
+                <p class="text-sm">Email baru dari stream / refresh akan muncul otomatis</p>
               </div>
             </template>
           </div>
         </div>
-        
-        <!-- Message detail view -->
+
         <div v-else class="flex flex-col">
-          <!-- Back bar -->
           <div class="px-4 py-3 border-b border-white/5 flex items-center gap-3">
             <button @click="showMail = null" class="btn-ghost btn-sm">
               <ChevronRight class="w-4 h-4 rotate-180" />
@@ -590,8 +787,7 @@ function getInitial(name) {
               <span>Hapus</span>
             </button>
           </div>
-          
-          <!-- Message header -->
+
           <div class="px-4 py-4 border-b border-white/5">
             <h3 class="font-semibold text-lg mb-3">{{ showMail.subject || '(Tanpa subjek)' }}</h3>
             <div class="flex items-center gap-3">
@@ -607,8 +803,7 @@ function getInitial(name) {
               </div>
             </div>
           </div>
-          
-          <!-- Message content -->
+
           <div class="flex-1 overflow-y-auto p-4">
             <iframe
               v-if="showMail.html?.length > 0"
@@ -622,8 +817,7 @@ function getInitial(name) {
             </div>
             <div v-else class="text-dark-500 text-sm">Tidak ada konten</div>
           </div>
-          
-          <!-- Attachments -->
+
           <div v-if="showMail.attachments?.length > 0" class="px-4 py-3 border-t border-white/5">
             <div class="text-xs text-dark-500 mb-2">Lampiran ({{ showMail.attachments.length }})</div>
             <div class="space-y-1.5">
@@ -644,11 +838,10 @@ function getInitial(name) {
         </div>
       </div>
     </main>
-    
-    <!-- Footer -->
+
     <footer class="border-t border-white/5 py-3">
       <div class="max-w-6xl mx-auto px-4 text-center text-xs text-dark-600">
-        Mode ringan tanpa database · pesan aktif disimpan di memori Worker dan cache browser
+        Stream realtime tersedia di <code>/stream_ready_use?token=...</code> dengan TTL 1 jam per koneksi
       </div>
     </footer>
   </div>

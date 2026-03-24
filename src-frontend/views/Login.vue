@@ -11,7 +11,8 @@ const route = useRoute()
 const toast = useToastStore()
 const mailStore = useMailStore()
 
-const accessKey = ref('')
+const accessKey = ref(localStorage.getItem('tm_access_key') || '')
+const apiBase = ref(localStorage.getItem('tm_api_base') || '/api')
 const loading = ref(false)
 
 async function handleResumeCode(code) {
@@ -38,6 +39,7 @@ async function handleResumeCode(code) {
 if (route.query.key) {
   sessionStorage.setItem('auth', 'true')
   sessionStorage.setItem('accessKey', route.query.key)
+  localStorage.setItem('tm_access_key', String(route.query.key))
   router.replace('/app')
 }
 
@@ -49,11 +51,15 @@ async function handleLogin() {
   loading.value = true
 
   try {
+    localStorage.setItem('tm_api_base', apiBase.value.trim() || '/api')
+
     if (accessKey.value) {
       sessionStorage.setItem('accessKey', accessKey.value)
+      localStorage.setItem('tm_access_key', accessKey.value)
       await api.getDomains()
     } else {
       sessionStorage.removeItem('accessKey')
+      localStorage.removeItem('tm_access_key')
     }
 
     sessionStorage.setItem('auth', 'true')
@@ -99,6 +105,15 @@ async function handleLogin() {
           
           <!-- Form -->
           <form @submit.prevent="handleLogin" class="space-y-5">
+            <div class="relative">
+              <input
+                v-model="apiBase"
+                type="text"
+                class="input"
+                placeholder="/api atau https://domain.com/api"
+                autocomplete="off"
+              >
+            </div>
             <div class="relative">
               <input
                 v-model="accessKey"

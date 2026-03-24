@@ -1,5 +1,3 @@
-const API_BASE = '/api'
-
 class ApiError extends Error {
   constructor(message, status) {
     super(message)
@@ -7,12 +5,28 @@ class ApiError extends Error {
   }
 }
 
+function getApiBase() {
+  return localStorage.getItem('tm_api_base') || '/api'
+}
+
 function getAccessKey() {
-  return sessionStorage.getItem('accessKey')
+  return localStorage.getItem('tm_access_key') || sessionStorage.getItem('accessKey')
+}
+
+function joinUrl(base, path) {
+  const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base
+  const cleanPath = path.startsWith('/') ? path : `/${path}`
+  return `${cleanBase}${cleanPath}`
+}
+
+function resolveApiUrl(path) {
+  const base = getApiBase()
+  const raw = joinUrl(base, path)
+  return new URL(raw, window.location.origin).toString()
 }
 
 async function request(path, options = {}) {
-  const url = `${API_BASE}${path}`
+  const url = resolveApiUrl(path)
   const accessKey = getAccessKey()
   const config = {
     ...options,
@@ -21,14 +35,13 @@ async function request(path, options = {}) {
       ...options.headers,
     },
   }
-  
+
   if (accessKey) {
     config.headers['X-Access-Key'] = accessKey
   }
 
   const response = await fetch(url, config)
-  
-  // Handle 204 No Content
+
   if (response.status === 204) {
     return null
   }
@@ -43,13 +56,14 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  // Domains
+  getApiBase,
+  resolveApiUrl,
+
   async getDomains() {
     const data = await request('/domains')
     return data['hydra:member'] || []
   },
 
-  // Accounts
   async createAccount(address, password) {
     return request('/accounts', {
       method: 'POST',
@@ -114,7 +128,6 @@ export const api = {
     })
   },
 
-  // Messages
   async getMessages(token, page = 1) {
     const data = await request(`/messages?page=${page}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -151,9 +164,44 @@ export const api = {
     })
   },
 
-  // Attachments
   getAttachmentUrl(id) {
-    return `${API_BASE}/attachments/${id}`
+    return resolveApiUrl(`/attachments/${id}`)
+  },
+
+  getStreamUrl(token) {
+    const base = getApiBase()
+    const streamBase = base.endsWith('/api') ? base.slice(0, -4) : base
+    const url = new URL(joinUrl(streamBase, '/stream_ready_use'), window.location.origin)
+    url.searchParams.set('token', token)
+    return url.toString()
+  },
+
+  async getRuntimeConfig(token) {
+    return request('/runtime-config', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  },
+
+  async updateRuntimeConfig(token, payload) {
+    return request('/runtime-config', {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async d1LoadCache(token) {
+    return request('/storage/d1/load', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  },
+
+  async d1MigrateCache(token, payload) {
+    return request('/storage/d1/migrate', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    })
   },
 }
 

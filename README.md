@@ -1,22 +1,8 @@
 # CrotMail
 
-Disposable email service berbasis Cloudflare Workers dengan mode ringan tanpa database. Inbox aktif ditahan di memori Worker, lalu frontend menyimpan cache email ke `localStorage` agar UI terasa instan dan instalasi jauh lebih cepat.
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Stars](https://img.shields.io/github/stars/imnoob59/crotmail?style=social)](https://github.com/imnoob59/crotmail/stargazers)
-
-- Website: https://crotmail.app
-- Repository: https://github.com/imnoob59/crotmail
+CrotMail adalah temp mail berbasis Cloudflare Workers dengan mode instalasi cepat (tanpa DB wajib), plus stream realtime untuk email masuk.
 
 ## Quick Start
-
-### Prasyarat
-
-- Node.js 18+
-- Akun Cloudflare
-- Domain yang aktif di Cloudflare untuk Email Routing
-
-### Instalasi Cepat
 
 1. Install dependency:
 
@@ -24,19 +10,19 @@ Disposable email service berbasis Cloudflare Workers dengan mode ringan tanpa da
 npm install
 ```
 
-2. Login ke Wrangler:
+2. Login Wrangler:
 
 ```bash
 npx wrangler login
 ```
 
-3. Salin template config:
+3. Copy config:
 
 ```bash
 cp wrangler.clean.toml wrangler.toml
 ```
 
-4. Isi variable minimum di `wrangler.toml`:
+4. Isi variable minimal:
 
 ```toml
 [vars]
@@ -45,7 +31,7 @@ EXPIRE_MINUTES = "43200"
 MESSAGE_RETENTION_DAYS = "1"
 ```
 
-`ACCESS_KEY` sekarang opsional. Kalau ingin membatasi pembuatan inbox dari UI/API, simpan sebagai secret:
+`ACCESS_KEY` opsional:
 
 ```bash
 npx wrangler secret put ACCESS_KEY
@@ -57,116 +43,95 @@ npx wrangler secret put ACCESS_KEY
 npm run deploy
 ```
 
-6. Verifikasi domain endpoint:
+## Endpoint Realtime
 
-Tanpa access key:
+Endpoint stream:
 
-```bash
-curl https://your-domain.com/api/domains
+```text
+GET /stream_ready_use?token=xxxx
 ```
 
-Dengan access key:
+Perilaku:
 
-```bash
-curl -H "X-Access-Key: ACCESS_KEY_ANDA" https://your-domain.com/api/domains
+- Menggunakan SSE (`text/event-stream`)
+- Event `ready` saat konek berhasil
+- Event `message` saat email baru masuk
+- Event `ping` keepalive
+- Koneksi stream auto ditutup setelah 1 jam (`event: end`)
+
+## Pengaturan dari UI
+
+Di halaman `/app` sekarang tersedia panel konfigurasi:
+
+- Storage provider:
+  - `localStorage` (default)
+  - `Supabase`
+  - `Cloudflare D1`
+- Storage base URL
+- Storage API key
+- API base (`/api` atau custom domain API)
+- Access key untuk header `X-Access-Key`
+- Runtime config:
+  - `ACCESS_KEY`
+  - `MAIL_DOMAINS`
+  - `EXPIRE_MINUTES`
+  - `MESSAGE_RETENTION_DAYS`
+- Tombol:
+  - `Simpan UI Config`
+  - `Migrate Sekarang`
+  - `Apply Runtime Config`
+
+Catatan runtime config:
+
+- Runtime config disimpan di memory Worker (sementara)
+- Akan reset jika Worker restart/redeploy
+
+## Storage Provider Notes
+
+### 1) localStorage (default)
+
+- Tanpa setup tambahan
+- Cache email ada di browser user
+
+### 2) Supabase
+
+UI akan baca/tulis tabel `crotmail_cache` via Supabase REST.
+
+Contoh struktur tabel minimum:
+
+```sql
+create table if not exists public.crotmail_cache (
+  address text primary key,
+  messages jsonb not null default '[]'::jsonb,
+  current_mail jsonb null,
+  updated_at timestamptz not null default now()
+);
 ```
 
-Kalau domain list sudah keluar, lanjut setup Email Routing ke Worker supaya inbox bisa menerima email masuk.
+### 3) Cloudflare D1
 
-## Yang Berubah di Mode Ringan
+Untuk opsi D1, binding `DB` harus disediakan di Wrangler (opsional, hanya jika dipakai provider D1). Worker akan membuat tabel cache UI otomatis saat endpoint migrasi dipanggil.
 
-- Tidak perlu D1
-- Tidak perlu KV
-- Tidak perlu migration schema
-- Session inbox tetap disimpan di browser via `localStorage`
-- Email yang sudah diambil UI akan dicache lokal agar muncul lebih cepat saat reload
+## Arsitektur Ringkas
 
-## Tradeoff Penting
-
-Mode ini memang lebih cepat diinstal, tapi ada konsekuensi:
-
-- Mailbox aktif disimpan di memori Worker, bukan storage durabel
-- Saat Worker restart, redeploy, atau pindah isolate, inbox aktif bisa hilang
-- `localStorage` hanya menyimpan cache browser, bukan sumber data utama saat email baru masuk
-
-Kalau Anda butuh inbox yang lebih tahan restart atau histori yang lebih konsisten, sebaiknya pakai mode dengan storage persisten.
-
-## Highlight Fitur
-
-- Inbox instan dengan random address atau custom username
-- Dukungan multi-domain dari `MAIL_DOMAINS`
-- Resume inbox via kode unik 8 karakter
-- Auto refresh inbox di UI
-- Cache email lokal di browser
-- UI modern dengan Vue 3 + Tailwind
-- `ACCESS_KEY` opsional untuk proteksi endpoint sensitif
-
-## Arsitektur
-
-### Backend
-
-- Cloudflare Workers
-- In-memory mailbox store
-- JWT authentication (`full` dan `limited`)
-- Cloudflare Email Worker handler untuk menangkap email masuk
-
-### Frontend
-
-- Vue 3
-- Vite
-- Tailwind CSS
-- Pinia
-- `localStorage` untuk session dan cache inbox
-
-## Endpoint Penting
-
-- `GET /api/domains` daftar domain inbox
-- `POST /api/generate` buat inbox random
-- `POST /api/custom` buat inbox custom
-- `POST /api/resume` buka inbox via resume code
-- `GET /api/messages` ambil daftar email inbox aktif
-- `GET /api/messages/{id}` detail email
-- `DELETE /api/messages/{id}` hapus email
-- `DELETE /api/accounts/{id}` hapus inbox milik session aktif
-
-Dokumentasi API lengkap ada di [API.md](./API.md).
+- Inbox aktif dan email masuk utama: in-memory Worker
+- Realtime update: SSE `/stream_ready_use`
+- Cache UI: provider yang dipilih dari UI
+- Cleanup:
+  - pesan lama berdasarkan `MESSAGE_RETENTION_DAYS`
+  - stream session auto expire 1 jam
 
 ## Konfigurasi Environment
 
 | Variable | Required | Keterangan |
 |---|---|---|
-| `MAIL_DOMAINS` | Yes | Daftar domain inbox, pisahkan koma |
-| `EXPIRE_MINUTES` | No | Umur inbox default dalam menit, default `43200` |
-| `MESSAGE_RETENTION_DAYS` | No | Retensi pesan in-memory sebelum cleanup, default `1` |
-| `ACCESS_KEY` | No | Jika diisi, endpoint sensitif butuh `X-Access-Key` |
-| `JWT_SECRET` | No | Secret JWT custom. Jika kosong akan fallback ke `ACCESS_KEY` atau secret bawaan mode ringan |
+| `MAIL_DOMAINS` | Yes | Daftar domain inbox |
+| `EXPIRE_MINUTES` | No | Umur inbox default |
+| `MESSAGE_RETENTION_DAYS` | No | Retensi pesan |
+| `ACCESS_KEY` | No | Proteksi endpoint sensitif |
+| `JWT_SECRET` | No | Secret JWT custom |
 
-## Deploy Cloudflare
+## Penting
 
-### Opsi A. Dashboard / GitHub
-
-1. Connect repository ke Cloudflare Workers and Pages.
-2. Build command: `npm run build`.
-3. Tambahkan binding assets sesuai template.
-4. Isi `MAIL_DOMAINS`, `EXPIRE_MINUTES`, `MESSAGE_RETENTION_DAYS`.
-5. Tambahkan `ACCESS_KEY` jika ingin mode privat.
-6. Deploy.
-
-### Opsi B. Wrangler CLI
-
-1. `npm install`
-2. `npx wrangler login`
-3. `cp wrangler.clean.toml wrangler.toml`
-4. Isi variable di `wrangler.toml`
-5. `npm run deploy`
-
-## Setup Email Routing
-
-Untuk tiap domain inbox:
-
-1. Pastikan domain dikelola di Cloudflare.
-2. Buka `Email` -> `Email Routing`.
-3. Tambahkan rule `*@domain-kamu.com`.
-4. Arahkan action ke Worker `crot-mail`.
-
-Setelah itu email yang masuk ke domain tersebut akan ditangkap oleh handler email Worker dan tampil di UI saat inbox aktif dipolling.
+- Mode ini fokus kemudahan penggunaan dan instalasi cepat.
+- Untuk kebutuhan durability tinggi (data tahan restart/redeploy), gunakan provider cache yang persisten (`Supabase`/`D1`) dan pertimbangkan migrasi arsitektur mailbox utama ke storage persisten penuh.
