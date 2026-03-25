@@ -9,7 +9,6 @@ node_modules/
 .env.local
 .dev.vars
 wrangler.local.toml
-wrangler.toml
 
 # IDE
 .vscode/
@@ -18,3 +17,7 @@ wrangler.toml
 # OS files
 .DS_Store
 Thumbs.db
+
+.dev.vars*
+!.dev.vars.example
+!.env.example

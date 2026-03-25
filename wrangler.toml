@@ -22,13 +22,13 @@ crons = ["*/5 * * * *"]
 # database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
 [vars]
-MAIL_DOMAINS = "mail1.example.com,mail2.example.com"
+MAIL_DOMAINS = "tempnewmail.apipedia.id,tempmail.apipedia.id,newmailtemp.apipedia.id"
 EXPIRE_MINUTES = "43200"
 MESSAGE_RETENTION_DAYS = "1"
 
 # OPTIONAL:
 # If you want to protect mailbox creation/admin endpoints, set ACCESS_KEY as a secret:
-# npx wrangler secret put ACCESS_KEY --config wrangler.toml
+# npx wrangler secret put ACCESS_KEY --config wrangler.clean.toml
 #
 # Optional custom JWT secret:
-# npx wrangler secret put JWT_SECRET --config wrangler.toml
+# npx wrangler secret put JWT_SECRET --config wrangler.clean.toml

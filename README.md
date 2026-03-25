@@ -16,13 +16,7 @@ npm install
 npx wrangler login
 ```
 
-3. Copy config:
-
-```bash
-cp wrangler.clean.toml wrangler.toml
-```
-
-4. Isi variable minimal:
+3. Isi variable minimal di `wrangler.toml`:
 
 ```toml
 [vars]
@@ -37,7 +31,7 @@ MESSAGE_RETENTION_DAYS = "1"
 npx wrangler secret put ACCESS_KEY
 ```
 
-5. Deploy:
+4. Deploy:
 
 ```bash
 npm run deploy
